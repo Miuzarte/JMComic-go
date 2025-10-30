@@ -8,7 +8,11 @@ import (
 	"time"
 )
 
-func unmarshalTo[T any](data []byte) (*T, error) {
+func unmarshalTo[T any](data []byte, err error) (*T, error) {
+	if err != nil {
+		return nil, err
+	}
+	// fmt.Printf("%s\n", data)
 	v := new(T)
 	return v, json.Unmarshal(data, v)
 }
@@ -18,5 +22,5 @@ func buildSecret(t time.Time, secret string) []byte {
 		[]byte(strconv.FormatInt(t.Unix(), 10)),
 		[]byte(secret),
 	))
-	return sum[:] 
+	return sum[:]
 }

@@ -1,8 +1,9 @@
 package constant
 
 var Headers = map[string]string{
-	"Accept":           "*/*",
-	"Accept-Encoding":  "gzip, deflate, br, zstd",
+	"Accept": "*/*",
+	// "Accept-Encoding":  "gzip, deflate, br, zstd",
+	"Accept-Encoding":  "identity",
 	"Accept-Language":  "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
 	"Connection":       "keep-alive",
 	"Origin":           "https://localhost",

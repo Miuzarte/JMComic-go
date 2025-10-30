@@ -17,12 +17,12 @@ import (
 )
 
 func BuildApiHeaders(t time.Time) map[string]string {
-	secret := buildSecret(t, "18comicAPPContent")
+	secret := buildSecret(t, API_SECRET_REQ)
 	token := make([]byte, hex.EncodedLen(len(secret)))
 	hex.Encode(token, secret)
 
 	// 请求后返回的结果用
-	// secret := buildSecret(t, "185Hcomic3PAPP7R")
+	// secret := buildSecret(t, [API_SECRET_RESP])
 	// 来解密
 
 	return map[string]string{
@@ -52,29 +52,44 @@ func BuildImageUrl(chapterId int, imageName string) string {
 	return fmt.Sprintf("%s/media/photos/%d/%s", ImageUrl, chapterId, imageName)
 }
 
+var httpClient = http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DisableCompression:    true, // diable gzip
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
+
 // Get 返回 body
-func Get(ctx context.Context, url string) (_ []byte, err error) {
+func Get(ctx context.Context, url string) (_ []byte, _ *http.Response, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for k, v := range constant.Headers {
-		req.Header.Add(k, v)
+		req.Header.Set(k, v)
+	}
+	for k, v := range BuildImageHeaders() {
+		req.Header.Set(k, v)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, resp, err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, resp, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		err = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
-	return body, err
+	return body, resp, err
 }
 
 // GetApi 带解密
@@ -85,8 +100,11 @@ func GetApi(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	for k, v := range constant.Headers {
+		req.Header.Set(k, v)
+	}
 	for k, v := range BuildApiHeaders(t) {
-		req.Header.Add(k, v)
+		req.Header.Set(k, v)
 	}
 
 	// 有时'data'直接是json，不需要解密 (?
@@ -118,7 +136,7 @@ func PostApi(ctx context.Context, url string, data io.Reader) ([]byte, error) {
 
 // DoApi 带解密
 func DoApi(req *http.Request, t time.Time) ([]byte, error) {
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +152,14 @@ func DoApi(req *http.Request, t time.Time) ([]byte, error) {
 	apiResp := &ApiResponse{}
 	err = json.Unmarshal(b, apiResp)
 	if err != nil {
-		// panic(fmt.Errorf("[FIXME] unexpected response format: %s", b))
+		type RespErr struct {
+			Code     int    `json:"code"`
+			ErrorMsg string `json:"errorMsg"`
+		}
+		respErr := RespErr{}
+		if err := json.Unmarshal(b, &respErr); err == nil {
+			return nil, wrapErr(fmt.Errorf("bad response status code: %d", respErr.Code), respErr.ErrorMsg)
+		}
 		return nil, wrapErr(err, string(b))
 	}
 	return apiResp.Decrypt(t)
@@ -150,7 +175,7 @@ func (ar *ApiResponse) Decrypt(t time.Time) ([]byte, error) {
 	if ar.Code != http.StatusOK {
 		return nil, fmt.Errorf("ApiResponse.Decrypt: unexpected status code: %d", ar.Code)
 	}
-	return decrypt([]byte(ar.Data), buildSecret(t, "185Hcomic3PAPP7R"))
+	return decrypt([]byte(ar.Data), buildSecret(t, API_SECRET_RESP))
 }
 
 func decrypt(input, secret []byte) ([]byte, error) {

@@ -1,8 +1,16 @@
 package JmComic
 
-import "testing"
+import (
+	"fmt"
+	"os"
+	"testing"
+)
 
-const testJmId = "JM1218574"
+const (
+	testJmId       = 1026275
+	testJmIdMulti1 = 519180
+	testJmIdMulti2 = 521226
+)
 
 func TestGetServer(t *testing.T) {
 	resp, err := GetServer(t.Context())
@@ -23,7 +31,7 @@ func TestGetSetting(t *testing.T) {
 }
 
 func TestSearch(t *testing.T) {
-	resp, err := Search(t.Context(), "C99", "", 0)
+	resp, err := Search(t.Context(), "C99", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,10 +49,26 @@ func TestGetAlbum(t *testing.T) {
 }
 
 func TestGetChapter(t *testing.T) {
-	resp, err := GetChapter(t.Context(), "1218574") // 没有分章节, JmId 作唯一章节
+	resp, err := GetChapter(t.Context(), testJmId) // 没有分章节, JmId 作唯一章节
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("%+v", *resp)
 	// t.Logf("%s", resp.Raw)
+}
+
+func TestDownloadComic(t *testing.T) {
+	for img, err := range DownloadComicIter(t.Context(), testJmId) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, e := os.Create(fmt.Sprintf("/home/miuzarte/git/JMComic-go/_download/%s", img.Name))
+		if e != nil {
+			t.Fatal(e)
+		}
+		f.Write(img.Data)
+		f.Close()
+		t.Logf("%s: %d", img.Name, len(img.Data))
+		break
+	}
 }

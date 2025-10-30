@@ -2,6 +2,7 @@ package JmComic
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"image/draw"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +22,12 @@ import (
 
 // CalcNumParts 计算混淆分块数
 func CalcNumParts(chapterId int, imageName string) (numParts int) {
+	dotIndex := strings.Index(imageName, ".")
+	if dotIndex == -1 {
+		return 0
+	}
+	imageName = imageName[:dotIndex]
+
 	var modulus byte = 0
 
 	switch {
@@ -60,6 +68,20 @@ func DescrambleImage(imgData []byte, num int) (_ []byte, err error) {
 		img, err = png.Decode(bytes.NewReader(imgData))
 	case "image/webp":
 		img, err = webp.Decode(bytes.NewReader(imgData))
+	case "application/x-gzip":
+		// 已在 [httpClient] 与 [constant.Header] 处请求不压缩
+		gr, err2 := gzip.NewReader(bytes.NewReader(imgData))
+		if err2 != nil {
+			err = fmt.Errorf("gzip new reader: %w", err2)
+			break
+		}
+		defer gr.Close()
+		decompressed, err2 := io.ReadAll(gr)
+		if err2 != nil {
+			err = fmt.Errorf("read gzip: %w", err2)
+			break
+		}
+		return DescrambleImage(decompressed, num)
 	case "application/octet-stream": // fallback
 		return nil, fmt.Errorf("failed to decode image: [%X %X %X %X]", imgData[0], imgData[1], imgData[2], imgData[3])
 	default:
@@ -72,8 +94,7 @@ func DescrambleImage(imgData []byte, num int) (_ []byte, err error) {
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
-	blockSize := height / num
-	remainder := height % num
+	blockHeight := height / num
 
 	type block struct {
 		img image.Image
@@ -81,18 +102,14 @@ func DescrambleImage(imgData []byte, num int) (_ []byte, err error) {
 	}
 	blocks := make([]block, 0, num)
 	currentY := 0
-	for i := range num {
-		h := blockSize
-		if i < remainder {
-			h++
-		}
+	for range num {
 		// 创建目标块并从原图复制对应区域
-		dstBlock := image.NewRGBA(image.Rect(0, 0, width, h))
+		dstBlock := image.NewRGBA(image.Rect(0, 0, width, blockHeight))
 		srcPoint := image.Point{X: 0, Y: currentY}
 		draw.Draw(dstBlock, dstBlock.Bounds(), img, srcPoint, draw.Src)
 
-		blocks = append(blocks, block{img: dstBlock, h: h})
-		currentY += h
+		blocks = append(blocks, block{img: dstBlock, h: blockHeight})
+		currentY += blockHeight
 	}
 
 	// 反向拼接
@@ -123,29 +140,8 @@ func DescrambleImage(imgData []byte, num int) (_ []byte, err error) {
 	return buf.Bytes(), nil
 }
 
-// DownloadImage 下载图片并反混淆
-//
-// TODO: 并发与生成器
-func DownloadImage(ctx context.Context, chapterId int, imageName string) ([]byte, error) {
-	imgUrl := BuildImageUrl(chapterId, imageName)
-	imgData, err := Get(ctx, imgUrl)
-	if err != nil {
-		return nil, err
-	}
-
-	if strings.HasSuffix(imageName, ".gif") {
-		// no de-scrambling needed for gif
-		return imgData, nil
-	}
-	numParts := CalcNumParts(chapterId, imageName)
-	if numParts > 1 {
-		return DescrambleImage(imgData, numParts)
-	}
-	// no de-scrambling needed
-	return imgData, nil
-}
-
 func DownloadCover(ctx context.Context, comicId int) ([]byte, error) {
 	imgUrl := BuildCoverUrl(comicId)
-	return Get(ctx, imgUrl)
+	b, _, err := Get(ctx, imgUrl)
+	return b, err
 }

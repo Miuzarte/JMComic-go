@@ -1,12 +1,5 @@
 package JmComic
 
-const (
-	API_SETTING = "/setting"
-	API_SEARCH  = "/search"
-	API_ALBUM   = "/album"
-	API_CHAPTER = "/chapter"
-)
-
 type Server struct {
 	Setting   []string   `json:"Setting"`
 	Server    []string   `json:"Server"`
@@ -94,17 +87,23 @@ type SearchResp struct {
 	Content     []ComicBasic `json:"content"`
 }
 
-type Album struct {
-	Id          int    `json:"id"`
-	Name        string `json:"name"`
-	Images      []any  `json:"images"`      // empty
-	Addtime     string `json:"addtime"`     // timestamp (second)
-	Description string `json:"description"` // ""
-	TotalViews  string `json:"total_views"` // int
-	Likes       string `json:"likes"`       // int
+type Serie struct {
+	Id   string `json:"id"`
+	Name string `json:"name"` // if .Name == "" { name = sort }
+	Sort string `json:"sort"`
+}
 
-	Series   []any  `json:"series"`    // TODO
-	SeriesId string `json:"series_id"` // TODO
+type Album struct {
+	Id          int      `json:"id"`
+	Name        string   `json:"name"`
+	Images      []string `json:"images"`      // empty
+	Addtime     string   `json:"addtime"`     // timestamp (second)
+	Description string   `json:"description"` // ""
+	TotalViews  string   `json:"total_views"` // int
+	Likes       string   `json:"likes"`       // int
+
+	Series   []Serie `json:"series"`    // empty when single
+	SeriesId string  `json:"series_id"` // single: "0" || multi: == .Id
 
 	CommentTotal string `json:"comment_total"` // int
 
@@ -114,10 +113,10 @@ type Album struct {
 	Actors []string `json:"actors"` // 人物 // "贪吃佩可"
 
 	RelatedList []struct {
-		Id     string `json:"id"`
-		Author string `json:"author"`
-		Name   string `json:"name"`
-		Images string `json:"images"` // ""
+		Id     string   `json:"id"`
+		Author string   `json:"author"`
+		Name   string   `json:"name"`
+		Images []string `json:"images"` // ""
 	} `json:"related_list"`
 
 	Liked      bool   `json:"liked"`
@@ -129,8 +128,8 @@ type Album struct {
 
 type Chapter struct {
 	Id         int      `json:"id"`
-	Series     []string `json:"series"` // TODO
-	Tags       string   `json:"tags"`   // space separated list
+	Series     []Serie  `json:"series"`
+	Tags       string   `json:"tags"` // space separated list, empty after series[0]
 	Name       string   `json:"name"`
 	Images     []string `json:"images"`    // "00001.webp"
 	Addtime    string   `json:"addtime"`   // timestamp (second)
