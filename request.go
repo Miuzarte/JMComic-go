@@ -55,7 +55,7 @@ func BuildImageUrl(chapterId int, imageName string) string {
 var httpClient = http.Client{
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DisableCompression:    true, // diable gzip
+		DisableCompression:    true, // disable gzip
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,

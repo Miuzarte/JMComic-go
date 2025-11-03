@@ -23,8 +23,8 @@ func UnwrapErr(err error) *Error {
 
 // Error 附带了更详细的信息
 //
-//	ehErr := JmComic.UnwarpErr(err)
-//	isXxx := ehErr.Is(JmComic.ErrXXX)
+//	jmErr := JmComic.UnwarpErr(err)
+//	isXxx := jmErr.Is(JmComic.ErrXXX)
 //
 // -
 type Error struct {
