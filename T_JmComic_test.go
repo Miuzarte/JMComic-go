@@ -58,7 +58,11 @@ func TestGetChapter(t *testing.T) {
 }
 
 func TestDownloadComic(t *testing.T) {
-	for img, err := range DownloadComicIter(t.Context(), testJmId) {
+	resp, err := GetChapter(t.Context(), testJmId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for img, err := range DownloadComicIter(t.Context(), resp) {
 		if err != nil {
 			t.Fatal(err)
 		}

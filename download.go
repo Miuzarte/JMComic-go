@@ -1,23 +1,13 @@
 package JmComic
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	"image/gif"
-	"image/jpeg"
-	"image/png"
 	"iter"
-	"net/http"
 	"strconv"
 	"strings"
 	"sync"
-
-	"golang.org/x/image/webp"
 )
-
-var ErrUnknownImageType = fmt.Errorf("unknown image type")
 
 type ImageType int
 
@@ -47,7 +37,7 @@ func (it ImageType) String() string {
 	}
 }
 
-func ParseImageType(s string) ImageType {
+func parseImageType(s string) ImageType {
 	switch strings.ToLower(s) {
 	case "webp":
 		return IMAGE_TYPE_WEBP
@@ -62,7 +52,7 @@ func ParseImageType(s string) ImageType {
 	}
 }
 
-func ParseImageMimeType(mimeType string) ImageType {
+func parseImageMimeType(mimeType string) ImageType {
 	switch strings.ToLower(mimeType) {
 	case "image/webp":
 		return IMAGE_TYPE_WEBP
@@ -78,7 +68,7 @@ func ParseImageMimeType(mimeType string) ImageType {
 }
 
 type Image struct {
-	ChapterId           int
+	ChapterId           int    // 反混淆用
 	Name                string // "00001.webp"
 	P                   int
 	Data                []byte
@@ -88,27 +78,7 @@ type Image struct {
 }
 
 func (i *Image) String() string {
-	return i.Name
-}
-
-func (i *Image) Decode() (image.Image, error) {
-	switch i.Type {
-	case IMAGE_TYPE_WEBP:
-		return webp.Decode(bytes.NewReader(i.Data))
-	case IMAGE_TYPE_JPEG:
-		return jpeg.Decode(bytes.NewReader(i.Data))
-	case IMAGE_TYPE_PNG:
-		return png.Decode(bytes.NewReader(i.Data))
-	case IMAGE_TYPE_GIF:
-		return gif.Decode(bytes.NewReader(i.Data))
-	default:
-		img, typ := tryDecodeImage(i.Data)
-		if typ != IMAGE_TYPE_UNKNOWN {
-			i.Type = typ
-			return img, nil
-		}
-	}
-	return nil, wrapErr(ErrUnknownImageType, http.DetectContentType(i.Data))
+	return i.Name + ": " + strconv.Itoa(len(i.Data))
 }
 
 type download struct {
@@ -128,13 +98,13 @@ func newCoverDownload(search *SearchResp) (dls []*download) {
 	for i := range search.Content {
 		id, err := strconv.Atoi(search.Content[i].Id)
 		if err != nil {
-			panic("[TODO] handle non-numeric id")
+			panic(fmt.Errorf("[FIXME] handle non-numeric id: %s", search.Content[i].Id))
 		}
 		dls[i] = &download{
 			img: &Image{
 				ChapterId: id,
 				Name:      DOWNLOAD_TYPE_COVER,
-				P:         i + 1,
+				// P: i + 1,
 			},
 			err: make(chan error, 1),
 		}
@@ -232,7 +202,7 @@ func downloadAndDescrambleImage(ctx context.Context, img *Image) error {
 		nct = DOWNLOAD_TYPE_COVER
 	}
 
-	img.Type = ParseImageMimeType(hct)
+	img.Type = parseImageMimeType(hct)
 
 	switch nct {
 	case "gif", DOWNLOAD_TYPE_COVER:
@@ -251,33 +221,6 @@ func downloadAndDescrambleImage(ctx context.Context, img *Image) error {
 		img.Data = data
 	}
 	return nil
-}
-
-func tryDecodeImage(data []byte) (img image.Image, _ ImageType) {
-	var err error
-	switch http.DetectContentType(data) {
-	case "image/webp":
-		img, err = webp.Decode(bytes.NewReader(data))
-		if err == nil {
-			return img, IMAGE_TYPE_WEBP
-		}
-	case "image/jpeg":
-		img, err = jpeg.Decode(bytes.NewReader(data))
-		if err == nil {
-			return img, IMAGE_TYPE_JPEG
-		}
-	case "image/png":
-		img, err = png.Decode(bytes.NewReader(data))
-		if err == nil {
-			return img, IMAGE_TYPE_PNG
-		}
-	case "image/gif":
-		img, err = gif.Decode(bytes.NewReader(data))
-		if err == nil {
-			return img, IMAGE_TYPE_GIF
-		}
-	}
-	return nil, IMAGE_TYPE_UNKNOWN
 }
 
 type limiter struct {

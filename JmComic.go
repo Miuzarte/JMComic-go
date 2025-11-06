@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"iter"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -48,6 +49,18 @@ func SetThreads(n int) {
 		n = 1
 	}
 	threads = n
+}
+
+// SetUseEnvProxy 设置是否使用系统环境变量中的代理
+//
+// 默认为 true
+func SetUseEnvProxy(b bool) {
+	ht := httpClient.Transport.(*http.Transport)
+	if b {
+		ht.Proxy = http.ProxyFromEnvironment
+	} else {
+		ht.Proxy = nil
+	}
 }
 
 func GetServer(ctx context.Context) (*Server, error) {
@@ -109,15 +122,6 @@ func DownloadCoversIter(ctx context.Context, search *SearchResp) iter.Seq2[Image
 	return newDownloader(ctx, newCoverDownload(search)).downloadIter()
 }
 
-func DownloadComicIter(ctx context.Context, chapterId int) iter.Seq2[Image, error] {
-	chapter, err := GetChapter(ctx, chapterId)
-	if err != nil {
-		return func(yield func(Image, error) bool) {
-			yield(Image{}, err)
-		}
-	}
-	if len(chapter.Images) == 0 {
-		panic("[TODO] handle empty chapter images list")
-	}
-	return newDownloader(ctx, newImageDownload(chapterId, chapter.Images)).downloadIter()
+func DownloadComicIter(ctx context.Context, chapter *Chapter) iter.Seq2[Image, error] {
+	return newDownloader(ctx, newImageDownload(chapter.Id, chapter.Images)).downloadIter()
 }
