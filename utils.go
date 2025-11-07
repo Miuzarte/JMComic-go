@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/go-viper/mapstructure/v2"
 )
 
 func unmarshalTo[T any](data []byte, err error) (*T, error) {
@@ -13,8 +15,29 @@ func unmarshalTo[T any](data []byte, err error) (*T, error) {
 		return nil, err
 	}
 	// fmt.Printf("%s\n", data)
-	v := new(T)
-	return v, json.Unmarshal(data, v)
+
+	input := make(map[string]any)
+	err = json.Unmarshal(data, &input)
+	if err != nil {
+		return nil, err
+	}
+
+	output := new(T)
+	config := mapstructure.DecoderConfig{
+		TagName:          "json",
+		Result:           output,
+		WeaklyTypedInput: true,
+	}
+	decoder, err := mapstructure.NewDecoder(&config)
+	if err != nil {
+		panic(err)
+	}
+	err = decoder.Decode(input)
+	if err != nil {
+		panic(err)
+	}
+
+	return output, nil
 }
 
 func buildSecret(t time.Time, secret string) []byte {

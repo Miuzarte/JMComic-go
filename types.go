@@ -83,7 +83,7 @@ type ComicBasic struct {
 
 type SearchResp struct {
 	SearchQuery string       `json:"search_query"`
-	Total       string       `json:"total"`
+	Total       int          `json:"total"`
 	Content     []ComicBasic `json:"content"`
 }
 
@@ -99,13 +99,13 @@ type Album struct {
 	Images      []string `json:"images"`      // empty
 	Addtime     string   `json:"addtime"`     // timestamp (second)
 	Description string   `json:"description"` // ""
-	TotalViews  string   `json:"total_views"` // int
-	Likes       string   `json:"likes"`       // int
+	TotalViews  int      `json:"total_views"`
+	Likes       int      `json:"likes"`
 
 	Series   []Serie `json:"series"`    // empty when single
 	SeriesId string  `json:"series_id"` // single: "0" || multi: == .Id
 
-	CommentTotal string `json:"comment_total"` // int
+	CommentTotal int `json:"comment_total"`
 
 	Author []string `json:"author"`
 	Tags   []string `json:"tags"`
@@ -131,9 +131,9 @@ type Chapter struct {
 	Series     []Serie  `json:"series"`
 	Tags       string   `json:"tags"` // space separated list, empty after series[0]
 	Name       string   `json:"name"`
-	Images     []string `json:"images"`    // "00001.webp"
-	Addtime    string   `json:"addtime"`   // timestamp (second)
-	SeriesId   string   `json:"series_id"` // int
+	Images     []string `json:"images"`  // "00001.webp"
+	Addtime    string   `json:"addtime"` // timestamp (second)
+	SeriesId   int      `json:"series_id"`
 	IsFavorite bool     `json:"is_favorite"`
 	Liked      bool     `json:"liked"`
 }
