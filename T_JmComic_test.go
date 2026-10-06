@@ -12,6 +12,34 @@ const (
 	testJmIdMulti2 = 521226
 )
 
+// TestSetThreads 并发数必须恒 >= 1
+//
+// 信号量容量为 0 时派发循环会在第一条上永久等待, 导致迭代器死锁
+func TestSetThreads(t *testing.T) {
+	t.Cleanup(func() { SetThreads(defaultThreads) })
+
+	for _, n := range []int{0, -1, -100} {
+		SetThreads(n)
+		if got := threadCount(); got != 1 {
+			t.Errorf("SetThreads(%d) 后并发数 = %d, want 1", n, got)
+		}
+	}
+
+	SetThreads(8)
+	if got := threadCount(); got != 8 {
+		t.Errorf("SetThreads(8) 后并发数 = %d, want 8", got)
+	}
+	if got := cap(newLimiter().sem); got != 8 {
+		t.Errorf("limiter 容量 = %d, want 8", got)
+	}
+
+	// 零值 (没调过 SetThreads) 也要兜底
+	threads.Store(0)
+	if got := cap(newLimiter().sem); got != defaultThreads {
+		t.Errorf("并发数为 0 时 limiter 容量 = %d, want %d", got, defaultThreads)
+	}
+}
+
 func TestGetServer(t *testing.T) {
 	resp, err := GetServer(t.Context())
 	if err != nil {

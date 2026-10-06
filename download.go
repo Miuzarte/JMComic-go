@@ -2,11 +2,12 @@ package JmComic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
+	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 type ImageType int
@@ -84,10 +85,16 @@ func (i *Image) String() string {
 type download struct {
 	img *Image
 	err chan error
+	// preErr 构造阶段就失败 (如 id 不是数字), 不再发请求
+	preErr error
 	// cache *cacheComic // TODO(maybe
 }
 
 func (d *download) start(ctx context.Context) {
+	if d.preErr != nil {
+		d.err <- d.preErr
+		return
+	}
 	d.err <- downloadAndDescrambleImage(ctx, d.img)
 }
 
@@ -96,18 +103,20 @@ const DOWNLOAD_TYPE_COVER = "<COVER>"
 func newCoverDownload(search *SearchResp) (dls []*download) {
 	dls = make([]*download, len(search.Content))
 	for i := range search.Content {
-		id, err := strconv.Atoi(search.Content[i].Id)
-		if err != nil {
-			panic(fmt.Errorf("[FIXME] handle non-numeric id: %s", search.Content[i].Id))
-		}
-		dls[i] = &download{
+		d := &download{
 			img: &Image{
-				ChapterId: id,
-				Name:      DOWNLOAD_TYPE_COVER,
-				// P: i + 1,
+				Name: DOWNLOAD_TYPE_COVER,
+				// P: i + 1, // 封面不是章节里的页, 不编页码
 			},
 			err: make(chan error, 1),
 		}
+		id, err := strconv.Atoi(search.Content[i].Id)
+		if err != nil {
+			d.preErr = fmt.Errorf("invalid comic id %q: %w", search.Content[i].Id, err)
+		} else {
+			d.img.ChapterId = id
+		}
+		dls[i] = d
 	}
 	return dls
 }
@@ -145,11 +154,15 @@ func newDownloader(ctx context.Context, dls []*download) *downloader {
 func (dl *downloader) startBackground() {
 	go func() {
 		limiter := newLimiter()
-		defer limiter.close()
 
-		for _, item := range dl.items {
+		for i, item := range dl.items {
 			select {
 			case <-dl.ctx.Done():
+				// 消费端按下标顺序读 err chan,
+				// 没派发出去的 item 必须补上错误, 否则永久阻塞
+				for _, rest := range dl.items[i:] {
+					rest.err <- dl.ctx.Err()
+				}
 				return
 			case limiter.acquire() <- struct{}{}:
 			}
@@ -174,63 +187,91 @@ func (dl *downloader) downloadIter() iter.Seq2[Image, error] {
 	}
 }
 
-// downloadAndDescrambleImage 下载图片并反混淆
-func downloadAndDescrambleImage(ctx context.Context, img *Image) error {
-	imgUrl := ""
-	if img.Name != DOWNLOAD_TYPE_COVER {
-		imgUrl = BuildImageUrl(img.ChapterId, img.Name)
-	} else {
-		imgUrl = BuildCoverUrl(img.ChapterId)
+// imageTries 单个图床的重试次数
+const imageTries = 2
+
+// fetchImage 依次尝试各个图床, 每个图床重试 [imageTries] 次
+func fetchImage(ctx context.Context, img *Image) (_ []byte, contentType string, err error) {
+	var errs []error
+
+	for _, host := range imageHostsSnapshot() {
+		imgUrl := buildImageUrlWith(host, img.ChapterId, img.Name)
+		if img.Name == DOWNLOAD_TYPE_COVER {
+			imgUrl = buildCoverUrlWith(host, img.ChapterId)
+		}
+
+		for try := 1; try <= imageTries; try++ {
+			var (
+				data []byte
+				resp *http.Response
+			)
+			data, resp, err = Get(ctx, imgUrl)
+			if err == nil {
+				switch ct := resp.Header.Get("Content-Type"); {
+				case len(data) == 0:
+					err = errors.New("empty body")
+				case !strings.HasPrefix(ct, "image/"):
+					err = fmt.Errorf("unexpected content type: %s", ct)
+				default:
+					return data, ct, nil
+				}
+			}
+
+			errs = append(errs, fmt.Errorf("%s (try %d): %w", host, try, err))
+			if ctx.Err() != nil {
+				return nil, "", errors.Join(errs...)
+			}
+		}
+
+		markImageHostBad(host)
 	}
 
-	imgData, resp, err := Get(ctx, imgUrl)
+	return nil, "", errors.Join(errs...)
+}
+
+// downloadAndDescrambleImage 下载图片并反混淆
+func downloadAndDescrambleImage(ctx context.Context, img *Image) error {
+	imgData, contentType, err := fetchImage(ctx, img)
 	if err != nil {
 		return err
 	}
 
 	img.Data = imgData
 
-	nct := ""
-	hct := resp.Header.Get("Content-Type")
-	// dct := http.DetectContentType(imgData)
-	if inSplits := strings.Split(img.Name, "."); len(inSplits) >= 2 {
-		nct = inSplits[len(inSplits)-1]
-		if "image/"+nct != hct {
-			return fmt.Errorf("\"image/\"+nct (%s) != hct (%s)", nct, hct)
+	mimeType := strings.TrimSpace(strings.Split(contentType, ";")[0])
+	img.Type = parseImageMimeType(mimeType)
+	if img.Type == IMAGE_TYPE_UNKNOWN {
+		if dotIndex := strings.LastIndex(img.Name, "."); dotIndex != -1 {
+			img.Type = parseImageType(img.Name[dotIndex+1:])
 		}
-	} else if img.Name == DOWNLOAD_TYPE_COVER {
-		nct = DOWNLOAD_TYPE_COVER
 	}
 
-	img.Type = parseImageMimeType(hct)
-
-	switch nct {
-	case "gif", DOWNLOAD_TYPE_COVER:
-		// no de-scrambling needed
+	if img.Type == IMAGE_TYPE_GIF || img.Name == DOWNLOAD_TYPE_COVER {
 		return nil
 	}
 
 	numParts := CalcNumParts(img.ChapterId, img.Name)
-	if numParts > 1 {
-		data, err := DescrambleImage(img.Data, numParts)
-		if err != nil {
-			img.IsDescrambledNeeded = true
-			return err
-		}
-		img.IsDescrambledNeeded = false
-		img.Data = data
+	if numParts <= 1 {
+		return nil
 	}
+
+	data, err := DescrambleImage(img.Data, numParts)
+	if err != nil {
+		img.IsDescrambledNeeded = true
+		return err
+	}
+	img.IsDescrambledNeeded = false
+	img.Data = data
 	return nil
 }
 
 type limiter struct {
-	sem  chan struct{}
-	once sync.Once
+	sem chan struct{}
 }
 
 func newLimiter() *limiter {
 	return &limiter{
-		sem: make(chan struct{}, threads),
+		sem: make(chan struct{}, threadCount()),
 	}
 }
 
@@ -240,10 +281,4 @@ func (l *limiter) acquire() chan<- struct{} {
 
 func (l *limiter) release() {
 	<-l.sem
-}
-
-func (l *limiter) close() {
-	l.once.Do(func() {
-		close(l.sem)
-	})
 }

@@ -16,8 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/HugoSmits86/nativewebp"
-	"golang.org/x/image/webp"
+	"github.com/deepteams/webp"
 )
 
 // CalcNumParts 计算混淆分块数
@@ -35,10 +34,10 @@ func CalcNumParts(chapterId int, imageName string) (numParts int) {
 		return 0
 	case chapterId < 268850:
 		return 10
-	case chapterId > 421926:
-		modulus = 8
-	default:
+	case chapterId < 421926:
 		modulus = 10
+	default:
+		modulus = 8
 	}
 
 	hash := md5.Sum([]byte(strconv.Itoa(chapterId) + imageName))
@@ -50,10 +49,16 @@ func CalcNumParts(chapterId int, imageName string) (numParts int) {
 
 var (
 	jpegOption = jpeg.Options{Quality: 95}
-	webpOption = nativewebp.Options{UseExtendedFormat: false}
+	webpOption = webp.EncoderOptions{
+		Quality: 85, // 图源本身就是有损 webp
+		Method:  4,
+	}
 )
 
 // DescrambleImage 反混淆图片
+//
+// 分块规则与官方客户端一致: 源图最底部一块吸收 height%num 的余数,
+// 再自下而上倒序拼接, 参考 _py/eighteencomic.py 的 SegmentationPicture
 func DescrambleImage(imgData []byte, num int) (_ []byte, err error) {
 	if num <= 1 {
 		return imgData, nil
@@ -70,20 +75,12 @@ func DescrambleImage(imgData []byte, num int) (_ []byte, err error) {
 		img, err = webp.Decode(bytes.NewReader(imgData))
 	case "application/x-gzip":
 		// 已在 [httpClient] 与 [constant.Header] 处请求不压缩
-		gr, err2 := gzip.NewReader(bytes.NewReader(imgData))
-		if err2 != nil {
-			err = fmt.Errorf("gzip new reader: %w", err2)
-			break
-		}
-		defer gr.Close()
-		decompressed, err2 := io.ReadAll(gr)
-		if err2 != nil {
-			err = fmt.Errorf("read gzip: %w", err2)
-			break
+		var decompressed []byte
+		decompressed, err = gunzip(imgData)
+		if err != nil {
+			return nil, err
 		}
 		return DescrambleImage(decompressed, num)
-	case "application/octet-stream": // fallback
-		return nil, fmt.Errorf("failed to decode image: [%X %X %X %X]", imgData[0], imgData[1], imgData[2], imgData[3])
 	default:
 		return nil, fmt.Errorf("unexpected image type: %s", ct)
 	}
@@ -91,53 +88,67 @@ func DescrambleImage(imgData []byte, num int) (_ []byte, err error) {
 		return nil, err
 	}
 
-	bounds := img.Bounds()
-	width, height := bounds.Dx(), bounds.Dy()
-
-	blockHeight := height / num
-
-	type block struct {
-		img image.Image
-		h   int
-	}
-	blocks := make([]block, 0, num)
-	currentY := 0
-	for range num {
-		// 创建目标块并从原图复制对应区域
-		dstBlock := image.NewRGBA(image.Rect(0, 0, width, blockHeight))
-		srcPoint := image.Point{X: 0, Y: currentY}
-		draw.Draw(dstBlock, dstBlock.Bounds(), img, srcPoint, draw.Src)
-
-		blocks = append(blocks, block{img: dstBlock, h: blockHeight})
-		currentY += blockHeight
-	}
-
-	// 反向拼接
-	newImg := image.NewRGBA(image.Rect(0, 0, width, height))
-	pasteY := 0
-	for i := len(blocks) - 1; i >= 0; i-- {
-		b := blocks[i]
-		r := image.Rect(0, pasteY, width, pasteY+b.h)
-		draw.Draw(newImg, r, b.img, image.Point{X: 0, Y: 0}, draw.Src)
-		pasteY += b.h
-	}
+	descrambled := reverseBlocks(img, num)
 
 	var buf bytes.Buffer
 	switch ct {
 	case "image/jpeg":
-		err = jpeg.Encode(&buf, newImg, &jpegOption)
+		err = jpeg.Encode(&buf, descrambled, &jpegOption)
 	case "image/png":
-		err = png.Encode(&buf, newImg)
+		err = png.Encode(&buf, descrambled)
 	case "image/webp":
-		err = nativewebp.Encode(&buf, newImg, &webpOption)
+		err = webp.Encode(&buf, descrambled, &webpOption)
 	default:
-		panic("unreachable")
+		return nil, fmt.Errorf("unexpected image type: %s", ct)
 	}
 	if err != nil {
 		return nil, err
 	}
 
 	return buf.Bytes(), nil
+}
+
+// reverseBlocks 把图片按 num 分块后倒序拼接
+//
+// 设 c = height/num, over = height%num,
+// 源图最底下一块高度为 c+over, 其余为 c,
+// 依次拼到输出顶部, 这样既不丢像素也不留透明行
+func reverseBlocks(src image.Image, num int) *image.NRGBA {
+	bounds := src.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+
+	dst := image.NewNRGBA(image.Rect(0, 0, width, height))
+
+	c, over := height/num, height%num
+	for i := range num {
+		h := c
+		ySrc := height - c*(i+1) - over
+		yDst := c * i
+		if i == 0 {
+			h += over // 源图最底下一块, 多出余数
+		} else {
+			yDst += over
+		}
+		draw.Draw(dst,
+			image.Rect(0, yDst, width, yDst+h),
+			src, image.Pt(bounds.Min.X, bounds.Min.Y+ySrc), draw.Src)
+	}
+
+	return dst
+}
+
+func gunzip(data []byte) ([]byte, error) {
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("gzip new reader: %w", err)
+	}
+	defer gr.Close()
+
+	decompressed, err := io.ReadAll(gr)
+	if err != nil {
+		return nil, fmt.Errorf("read gzip: %w", err)
+	}
+	return decompressed, nil
 }
 
 func DownloadCover(ctx context.Context, comicId int) ([]byte, error) {

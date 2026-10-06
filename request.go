@@ -11,7 +11,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/Miuzarte/JMComic-go/internal/constant"
@@ -38,24 +40,46 @@ func BuildApiHeaders(t time.Time) map[string]string {
 func BuildImageHeaders() map[string]string {
 	return map[string]string{
 		"Accept":         "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-		"Referer":        ApiHost,
+		"Referer":        normalizeHost(GetApiHost()),
 		"User-Agent":     UserAgent,
 		"Sec-Fetch-Dest": "image",
 		"Sec-Fetch-Mode": "no-cors",
 	}
 }
 
+// BuildCoverUrl 用当前图床拼封面地址
 func BuildCoverUrl(comicId int) string {
-	return fmt.Sprintf("%s/media/albums/%d_3x4.jpg", ImageUrl, comicId)
+	return buildCoverUrlWith(GetImageHost(), comicId)
 }
 
+// BuildImageUrl 用当前图床拼图片地址
 func BuildImageUrl(chapterId int, imageName string) string {
-	return fmt.Sprintf("%s/media/photos/%d/%s", ImageUrl, chapterId, imageName)
+	return buildImageUrlWith(GetImageHost(), chapterId, imageName)
+}
+
+func buildCoverUrlWith(host string, comicId int) string {
+	return fmt.Sprintf("%s/media/albums/%d_3x4.jpg", normalizeHost(host), comicId)
+}
+
+func buildImageUrlWith(host string, chapterId int, imageName string) string {
+	return fmt.Sprintf("%s/media/photos/%d/%s", normalizeHost(host), chapterId, imageName)
+}
+
+// useEnvProxy 是否使用系统环境变量中的代理, 默认为 true
+var useEnvProxy atomic.Bool
+
+func init() {
+	useEnvProxy.Store(true)
 }
 
 var httpClient = http.Client{
 	Transport: &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			if !useEnvProxy.Load() {
+				return nil, nil
+			}
+			return http.ProxyFromEnvironment(req)
+		},
 		DialContext: func(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
 			return dialer.DialContext
 		}(&net.Dialer{

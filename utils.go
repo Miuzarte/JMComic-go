@@ -16,7 +16,7 @@ func unmarshalTo[T any](data []byte, err error) (*T, error) {
 	}
 	// fmt.Printf("%s\n", data)
 
-	input := make(map[string]any)
+	input := map[string]any{}
 	err = json.Unmarshal(data, &input)
 	if err != nil {
 		return nil, err
